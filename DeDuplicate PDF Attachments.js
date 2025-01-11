@@ -1,11 +1,19 @@
 /**
- * DeDuplicate PDF Attachments
+ * @file DeDuplicate PDF Attachments
  * @author cerenkov
  * @version 0.1
- * @usage Select multiple items then trigger in context menu
- *        Warning: When the script is run on a well-maintained library with your annotations in PDFs, use the 'earliest' version of the getBest() function, which will preserve the earliest PDF with your annotations, but you'll need to manually remove/deduplicate earlier version PDFs when you want to keep a later-downloaded updated version (e.g. arXiv v2). When the script is run on a messy library with lots of PDF versions and no annotations to preserve, use the 'latest' version of the getBest() function, which will save your time from manually keeping only the updated version.
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
- * @menu DeDuplicate PDF Attachments (Multiple)
+ * @usage Select multiple items then trigger in the context menu
+ * @description Warning: When the script is run on a well-maintained library with 
+ * your annotations in PDFs, use the 'earliest' version of the getBest() function, 
+ * which will preserve the earliest PDF with your annotations, but you'll need to 
+ * manually remove/deduplicate earlier version PDFs when you want to keep a later-
+ * downloaded updated version (e.g. arXiv v2). When the script is run on a messy 
+ * library with lots of PDF versions and no annotations to preserve, use the 'latest' 
+ * version of the getBest() function, which will save your time from manually keeping 
+ * only the updated version.
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * suggested Menu Label: DeDuplicate PDF Attachments (Multiple)
+ * @todo add progress bar
  */
 
 const Zotero = require("Zotero");

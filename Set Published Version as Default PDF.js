@@ -1,10 +1,11 @@
 /**
- * Set Published Version as Default PDF
+ * @file Set Published Version as Default PDF
  * @author cerenkov
  * @version 0.1
- * @usage Select multiple items then trigger in context menu
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
- * @menu Set Published Version as Default PDF (Multiple)
+ * @usage Select multiple items then trigger in the context menu
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * suggested Menu Label: Set Published Version as Default PDF (Multiple)
+ * @todo add progress bar
  */
 
 const Zotero = require("Zotero");

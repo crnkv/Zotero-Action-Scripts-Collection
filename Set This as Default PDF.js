@@ -1,10 +1,10 @@
 /**
- * Set This as Default PDF
+ * @file Set This as Default PDF
  * @author cerenkov
  * @version 0.1
- * @usage Select one single PDF item then trigger in context menu
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
- * @menu Set This as Default PDF
+ * @usage Select one single PDF item then trigger in the context menu
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * suggested Menu Label: Set This as Default PDF
  */
 
 const Zotero = require("Zotero");

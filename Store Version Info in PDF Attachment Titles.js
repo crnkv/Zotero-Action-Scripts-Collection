@@ -1,10 +1,11 @@
 /**
- * Store Version Info in PDF Attachment Titles
+ * @file Store Version Info in PDF Attachment Titles
  * @author cerenkov
  * @version 0.1
- * @usage Select multiple items then trigger in context menu
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
- * @menu Store Version Info in PDF Attachment Titles (Multiple)
+ * @usage Select multiple items then trigger in the context menu
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * suggested Menu Label: Store Version Info in PDF Attachment Titles (Multiple)
+ * @todo add progress bar
  */
 
 const Zotero = require("Zotero");

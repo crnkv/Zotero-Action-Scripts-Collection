@@ -1,10 +1,11 @@
 /**
- * Download Free-Access or Sci-Hub PDF
+ * @file Download Free-Access or Sci-Hub PDF
  * @author cerenkov
  * @version 0.1
- * @usage Select multiple items then trigger in context menu
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
- * @menu Download Free-Access or Sci-Hub PDF (Multiple)
+ * @requires set up extensions.zotero.findPDFs.resolvers in the Advanced Config Editor, or via the Sci-PDF plugin
+ * @usage Select multiple items then trigger in the context menu
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * suggested Menu Label: Download Free-Access or Sci-Hub PDF (Multiple)
  */
 
 const Zotero = require("Zotero");

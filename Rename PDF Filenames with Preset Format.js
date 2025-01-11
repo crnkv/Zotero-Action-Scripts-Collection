@@ -1,11 +1,13 @@
 /**
- * Rename PDF Filenames with Preset Format
+ * @file Rename PDF Filenames with Preset Format
  * @author thalient-ai, cerenkov
  * @version 0.1
- * @usage Select multiple items then trigger in context menu
- * @link https://github.com/crnkv/Zotero-Action-Scripts-Collection
+ * @requires set up the 'Customize Filename Format' in the General Settings
+ * @usage Select multiple items then trigger in the context menu
+ * @see https://github.com/crnkv/Zotero-Action-Scripts-Collection
  * @see https://github.com/windingwind/zotero-actions-tags/discussions/380
- * @menu Rename PDF Filenames with Preset Format (Multiple)
+ * suggested Menu Label: Rename PDF Filenames with Preset Format (Multiple)
+ * @todo add progress bar
  */
 
 const Zotero = require("Zotero");

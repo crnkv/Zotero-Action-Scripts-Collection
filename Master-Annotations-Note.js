@@ -304,7 +304,218 @@ async function fetchAnnotationsForParentItem(parentItem) {
   return result;
 }
 
-async function generateNoteHTMLFromAnnotations(parentItem, visibleTitle) {
+/**
+ * Stellt sicher, dass für Bild/Ink-Annotationen ein Cache-PNG existiert,
+ * damit Zotero.Annotations.toJSON() eine data:URL zurückliefert.
+ * Rendert fehlende Caches einmal pro Attachment via PDFWorker.
+ */
+async function ensureImageAnnotationCaches(annotations) {
+  const renderedAttachmentIDs = new Set();
+
+  for (const ann of annotations) {
+    if (!ann || !["image", "ink"].includes(ann.annotationType)) {
+      continue;
+    }
+    try {
+      const hasCache = await Zotero.Annotations.hasCacheImage(ann);
+      if (hasCache) {
+        continue;
+      }
+      const attachmentID = ann.parentID;
+      if (!attachmentID || renderedAttachmentIDs.has(attachmentID)) {
+        continue;
+      }
+      renderedAttachmentIDs.add(attachmentID);
+      await Zotero.PDFWorker.renderAttachmentAnnotations(attachmentID);
+      logDebug(
+        `ensureImageAnnotationCaches: Cache gerendert für attachmentID=${attachmentID}`
+      );
+    } catch (e) {
+      logDebug(
+        "ensureImageAnnotationCaches: Fehler beim Rendern: " +
+          (e && e.message ? e.message : e)
+      );
+    }
+  }
+}
+
+/**
+ * Wandelt data:URL -> Blob (PNG o.ä.).
+ */
+function dataURLToBlob(dataurl) {
+  if (!dataurl || typeof dataurl !== "string") return null;
+  const parts = dataurl.split(",");
+  if (!parts[0] || !parts[0].includes("base64")) return null;
+  const mimeMatch = parts[0].match(/:(.*?);/);
+  const mime = mimeMatch && mimeMatch[1] ? mimeMatch[1] : "application/octet-stream";
+  const bstr = atob(parts[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) {
+    u8arr[n] = bstr.charCodeAt(n);
+  }
+  return new Blob([u8arr], { type: mime });
+}
+
+/**
+ * Baut zotero://open-pdf Link aus Annotation-JSON (attachmentURI + annotationKey).
+ */
+function buildOpenURIFromJSONAnnotation(ann) {
+  if (!ann || !ann.attachmentURI || !ann.id) return null;
+  try {
+    const m = ann.attachmentURI.match(/\/(users|groups)\/(\d+)\/items\/([A-Z0-9]+)/i);
+    if (!m) return null;
+    const scope = m[1] === "groups" ? `groups/${m[2]}` : "users/0";
+    const attachmentKey = m[3];
+    const params = [`annotation=${encodeURIComponent(String(ann.id))}`];
+    if (ann.pageLabel) {
+      params.unshift(`page=${encodeURIComponent(ann.pageLabel)}`);
+    }
+    return `zotero://open-pdf/${scope}/items/${attachmentKey}?${params.join("&")}`;
+  } catch (e) {
+    logDebug("buildOpenURIFromJSONAnnotation: Fehler " + (e && e.message ? e.message : e));
+    return null;
+  }
+}
+
+/**
+ * Umhüllt <img data-annotation> mit Links, die zur Annotation springen.
+ */
+function buildSelectURIFromCitationURI(uri) {
+  if (!uri || typeof uri !== "string") return null;
+  const m = uri.match(/zotero\.org\/(users|groups)\/(\d+)\/items\/([A-Z0-9]+)/i);
+  if (!m) return null;
+  const scope = m[1] === "groups" ? `groups/${m[2]}` : `users/${m[2]}`;
+  return `zotero://select/${scope}/items/${m[3]}`;
+}
+
+function wrapImagesWithLinks(serializedHTML, annMap, selectURIByAnnotation = new Map()) {
+  if (!serializedHTML || !annMap || annMap.size === 0) return serializedHTML;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(serializedHTML, "text/html");
+    // Suche nach beliebigen Elementen mit data-annotation (nicht nur <img>)
+    doc.querySelectorAll("[data-annotation]").forEach((node) => {
+      const annEncoded = node.getAttribute("data-annotation");
+      if (!annEncoded) return;
+      let annKey = null;
+      try {
+        const annObj = JSON.parse(decodeURIComponent(annEncoded));
+        annKey = annObj.annotationKey || annObj.id;
+      } catch (_) {}
+      if (!annKey) return;
+
+      const ann = annMap.get(annKey);
+      const href = buildOpenURIFromJSONAnnotation(ann);
+
+      // Ziel-<img> bestimmen (kann das Node selbst oder ein Kind sein)
+      const img =
+        node.tagName && node.tagName.toLowerCase() === "img"
+          ? node
+          : node.querySelector("img");
+      if (!img) return;
+
+      // src und alt sauber setzen
+      const src =
+        ann?.imageAttachmentKey
+          ? `attachments/${ann.imageAttachmentKey}.png`
+          : ann?.image || img.getAttribute("src") || "";
+      if (src) {
+        img.setAttribute("src", src);
+      }
+      img.setAttribute("alt", "image");
+      img.removeAttribute("width");
+      img.removeAttribute("height");
+
+      // Bild klickbar machen
+      let link = img.parentElement && img.parentElement.tagName.toLowerCase() === "a"
+        ? img.parentElement
+        : null;
+      if (!link) {
+        link = doc.createElement("a");
+        link.appendChild(img.cloneNode(true));
+        img.replaceWith(link);
+      }
+      link.setAttribute("href", href);
+
+      // Einfügepunkt: Absatz um das Bild, sonst der Link selbst
+      const insertionAnchor = link.closest("p") || link;
+
+      // Zusätzliche Zeile „Open Note“ anlegen
+      const openP = doc.createElement("p");
+      if (href) {
+        const openLink = doc.createElement("a");
+        openLink.setAttribute("href", href);
+        openLink.textContent = "Open Note";
+        openP.appendChild(openLink);
+      } else {
+        const openSpan = doc.createElement("span");
+        openSpan.textContent = "Open Note (kein Link verfügbar)";
+        openP.appendChild(openSpan);
+        logDebug("wrapImagesWithLinks: kein href für annKey=" + annKey);
+      }
+
+      // Bestehende, durch früheren Lauf erzeugte Links entfernen
+      const parent = insertionAnchor.parentNode || doc.body;
+      Array.from(parent.querySelectorAll("[data-annotation-ref='" + annKey + "']")).forEach((el) => el.remove());
+
+      openP.setAttribute("data-annotation-ref", annKey);
+
+      parent.insertBefore(openP, insertionAnchor.nextSibling);
+    });
+    return doc.body.innerHTML;
+  } catch (e) {
+    logDebug("wrapImagesWithLinks: Fehler " + (e && e.message ? e.message : e));
+    return serializedHTML;
+  }
+}
+
+/**
+ * Importiert Bild-Annotationen als eingebettetes Attachment, setzt imageAttachmentKey
+ * und entfernt das inline-Bild, sodass serializeAnnotations ein <img data-attachment-key> schreibt.
+ */
+async function importImagesForAnnotations(jsonAnnotations, noteItem, existingImageMap) {
+  for (const ann of jsonAnnotations) {
+    if (!ann || ann.imageAttachmentKey || !ann.image) {
+      continue;
+    }
+    // Wenn es bereits einen Anhang zu dieser Annotation gibt, wiederverwenden
+    const existingKey = existingImageMap?.get(ann.id);
+    if (existingKey) {
+      ann.imageAttachmentKey = existingKey;
+      delete ann.image;
+      continue;
+    }
+    try {
+      const blob = dataURLToBlob(ann.image);
+      if (!blob) {
+        continue;
+      }
+      const attachment = await Zotero.Attachments.importEmbeddedImage({
+        blob,
+        parentItemID: noteItem.id,
+        saveOptions: {
+          notifierData: {
+            noteEditorID: "master-annotations-note"
+          }
+        }
+      });
+      if (attachment && attachment.key) {
+        ann.imageAttachmentKey = attachment.key;
+        logDebug(
+          `importImagesForAnnotations: imageAttachmentKey gesetzt (${attachment.key}) für annotation ${ann.id}`
+        );
+      }
+    } catch (e) {
+      logDebug(
+        "importImagesForAnnotations: Fehler beim Import: " +
+          (e && e.message ? e.message : e)
+      );
+    }
+  }
+}
+
+async function generateNoteHTMLFromAnnotations(parentItem, noteItem, visibleTitle, existingImageMap = new Map()) {
   logDebug(
     "generateNoteHTMLFromAnnotations: START für parent.id=" +
       parentItem.id +
@@ -317,6 +528,7 @@ async function generateNoteHTMLFromAnnotations(parentItem, visibleTitle) {
     "generateNoteHTMLFromAnnotations: Anzahl Annotationen=" +
       annItems.length
   );
+  await ensureImageAnnotationCaches(annItems);
   LAST_SERIALIZE_DEBUG = [];
   LAST_SERIALIZE_DEBUG.push("annotations.length=" + annItems.length);
 
@@ -347,11 +559,45 @@ async function generateNoteHTMLFromAnnotations(parentItem, visibleTitle) {
 
   // JSON über Zotero.Annotations.toJSON + Zusatzfelder wie Zotero selbst
   const jsonAnnotations = [];
+  const annMap = new Map();
+  const attachmentURIByID = new Map();
+  const selectURIByAnnotation = new Map();
   for (let ann of annItems) {
     try {
       const j = await Zotero.Annotations.toJSON(ann);
       j.attachmentItemID = ann.parentID;
       j.id = ann.key;
+      // Fehlende attachmentURI nachreichen
+      try {
+        if (!j.attachmentURI && ann.parentID) {
+          let attURI = attachmentURIByID.get(ann.parentID);
+          if (!attURI) {
+            const attItem = await Zotero.Items.getAsync(ann.parentID);
+            if (attItem && Zotero.URI && typeof Zotero.URI.getItemURI === "function") {
+              attURI = Zotero.URI.getItemURI(attItem);
+              attachmentURIByID.set(ann.parentID, attURI);
+            }
+          }
+          if (attURI) {
+            j.attachmentURI = attURI;
+          }
+        }
+      } catch (_) {
+        // ignore
+      }
+      // Select-URI aus citationItem ableiten (für spätere Anzeige)
+      try {
+        const uris = j.citationItem && Array.isArray(j.citationItem.uris) ? j.citationItem.uris : null;
+        if (uris && uris.length) {
+          const sel = buildSelectURIFromCitationURI(uris[0]);
+          if (sel) {
+            selectURIByAnnotation.set(j.id, sel);
+          }
+        }
+      } catch (_) {
+        // ignore
+      }
+      annMap.set(j.id, j);
       jsonAnnotations.push(j);
     } catch (e) {
       logDebug(
@@ -370,6 +616,9 @@ async function generateNoteHTMLFromAnnotations(parentItem, visibleTitle) {
   }
   LAST_SERIALIZE_DEBUG.push("jsonAnnotations.length=" + jsonAnnotations.length);
 
+  // Bild-Annotationen wie im Original: data:URL -> eingebettetes Attachment
+  await importImagesForAnnotations(jsonAnnotations, noteItem, existingImageMap);
+
   // Serialize über EditorInstanceUtilities (wie Zotero)
   let serialized = { html: "", citationItems: [] };
   try {
@@ -377,6 +626,9 @@ async function generateNoteHTMLFromAnnotations(parentItem, visibleTitle) {
       jsonAnnotations,
       true // skipEmbeddingItemData wie in createNoteFromAnnotations
     );
+    if (serialized.html) {
+      serialized.html = wrapImagesWithLinks(serialized.html, annMap, selectURIByAnnotation);
+    }
   } catch (eSer) {
     logDebug(
       "generateNoteHTMLFromAnnotations: serializeAnnotations failed: " +
@@ -577,38 +829,60 @@ async function processSingleParentItem(parentItem) {
     : "(ohne Titel)";
   const title = buildNoteTitle(parentItem);
   const existingMaster = await findMasterNote(parentItem);
-  const noteHTML = await generateNoteHTMLFromAnnotations(parentItem, title);
 
-  if (!existingMaster) {
-    const newNote = new Zotero.Item("note");
-    newNote.parentID = parentItem.id;
-    newNote.libraryID = parentItem.libraryID;
-    newNote.setNote(noteHTML);
-    await newNote.saveTx();
-    logDebug(
-      "processSingleParentItem: Master-Note NEU angelegt, parentID=" +
-        parentItem.id +
-        ", newNote.id=" +
-        newNote.id
-    );
-    RESULTS.push({
-      action: "created",
-      parentTitle,
-      noteTitle: title
-    });
-  } else {
-    existingMaster.setNote(noteHTML);
-    await existingMaster.saveTx();
-    logDebug(
-      "processSingleParentItem: Master-Note AKTUALISIERT, note.id=" +
-        existingMaster.id
-    );
-    RESULTS.push({
-      action: "updated",
-      parentTitle,
-      noteTitle: title
-    });
+  // Falls vorhanden: vorhandene Image-Mappings aus dem bestehenden Inhalt lesen
+  const existingImageMap = new Map();
+  if (existingMaster) {
+    try {
+      const html = existingMaster.getNote() || "";
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, "text/html");
+      doc.querySelectorAll("img[data-attachment-key]").forEach((img) => {
+        const annEncoded = img.getAttribute("data-annotation");
+        const key = img.getAttribute("data-attachment-key");
+        if (!annEncoded || !key) return;
+        try {
+          const annObj = JSON.parse(decodeURIComponent(annEncoded));
+          const annKey = annObj.annotationKey || annObj.id;
+          if (annKey) {
+            existingImageMap.set(annKey, key);
+          }
+        } catch (_) {
+          // ignore parse errors
+        }
+      });
+    } catch (e) {
+      logDebug("processSingleParentItem: parse existing note failed: " + (e && e.message ? e.message : e));
+    }
   }
+
+  let noteItem = existingMaster;
+  let action = "updated";
+  if (!noteItem) {
+    // Note zuerst speichern, damit sie als Parent für eingebettete Bilder dient
+    noteItem = new Zotero.Item("note");
+    noteItem.parentID = parentItem.id;
+    noteItem.libraryID = parentItem.libraryID;
+    noteItem.setNote(""); // Platzhalter
+    await noteItem.saveTx();
+    action = "created";
+  }
+
+  const noteHTML = await generateNoteHTMLFromAnnotations(parentItem, noteItem, title, existingImageMap);
+
+  noteItem.setNote(noteHTML);
+  await noteItem.saveTx();
+  logDebug(
+    "processSingleParentItem: Master-Note " +
+      (action === "created" ? "NEU" : "AKTUALISIERT") +
+      ", note.id=" +
+      noteItem.id
+  );
+  RESULTS.push({
+    action,
+    parentTitle,
+    noteTitle: title
+  });
 
   logDebug("processSingleParentItem: ENDE für item.id=" + parentItem.id);
 }
